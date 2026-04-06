@@ -414,19 +414,6 @@ class StoreApp:
         c = self.content_area
         self._page_title(c, "Manage Products")
 
-        # Stat cards
-        products = get_products()
-        total    = len(products)
-        low      = len([p for p in products if p[4] <= LOW_STOCK_THRESHOLD])
-        priciest = max(products, key=lambda p: p[3]) if products else None
-
-        strip = tk.Frame(c, bg=MAIN_BG)
-        strip.pack(fill="x", padx=30, pady=(0, 18))
-        self._stat_card(strip, "Total Products",  str(total), color=PRIMARY)
-        self._stat_card(strip, "Low Stock Items", str(low),   color=DANGER)
-        self._stat_card(strip, "Most Expensive",
-                        f"{priciest[1]}  —  {priciest[3]:.2f} ₺" if priciest else "—",
-                        color=WARNING)
 
         # Add form
         card = self._card(c)
@@ -475,9 +462,35 @@ class StoreApp:
             for e in entries.values():
                 e.delete(0, tk.END)
 
-        btn_row = tk.Frame(card, bg=CARD_BG, padx=30, pady=(0, 22))
-        btn_row.pack(fill="x")
-        self._btn(btn_row, "+ Add New Product", add_action, color=PRIMARY).pack(side="left")
+        btn_row = tk.Frame(card, bg=CARD_BG, padx=30)
+        btn_row.pack(fill="x", pady=(0, 22))
+        self._btn(btn_row, "+ Add New Product", add_action, color=PRIMARY).pack(side="left", padx=(0, 10))
+
+        def quick_delete():
+            prods = get_products()
+            if not prods:
+                messagebox.showinfo("Info", "No products found.")
+                return
+            dlg = tk.Toplevel(self.root)
+            dlg.title("Delete Product")
+            dlg.geometry("320x160")
+            dlg.configure(bg=CARD_BG)
+            dlg.grab_set()
+            tk.Label(dlg, text="Select product to delete:", font=("Arial", 10, "bold"),
+                     bg=CARD_BG, fg=TEXT_DARK).pack(pady=(16, 6), padx=20, anchor="w")
+            names = [f"{p[0]} — {p[1]} ({p[3]:.2f} ₺)" for p in prods]
+            var = tk.StringVar(value=names[0])
+            ttk.Combobox(dlg, textvariable=var, values=names,
+                         state="readonly", width=34).pack(padx=20)
+            def do_delete():
+                pid = int(var.get().split("—")[0].strip())
+                if messagebox.askyesno("Confirm", "Delete this product?"):
+                    delete_product(pid)
+                    dlg.destroy()
+                    self.show_manage_products()
+            self._btn(dlg, "Delete", do_delete, color=DANGER).pack(pady=14)
+
+        self._btn(btn_row, "Delete Product", quick_delete, color=DANGER).pack(side="left")
 
         # Products table
         list_card = self._card(c)
@@ -566,7 +579,7 @@ class StoreApp:
                 delete_product(int(vals[0]))
                 load_products()
 
-        act_row = tk.Frame(list_card, bg=CARD_BG, padx=20, pady=(0, 14))
+        act_row = tk.Frame(list_card, bg=CARD_BG, padx=20)
         act_row.pack(fill="x")
         self._btn(act_row, "Edit", edit_product, color=WARNING, fg=TEXT_DARK).pack(side="left", padx=(0, 10))
         self._btn(act_row, "Delete", del_product, color=DANGER).pack(side="left")
@@ -888,7 +901,7 @@ class StoreApp:
         self._btn(filter_row, "Filter", apply_filter, color=PRIMARY).pack(side="left", padx=(0, 6))
         self._btn(filter_row, "Clear",  clear_filter, color="#64748b").pack(side="left")
 
-        cancel_row = tk.Frame(hist_card, bg=CARD_BG, padx=20, pady=(0, 12))
+        cancel_row = tk.Frame(hist_card, bg=CARD_BG, padx=20)
         cancel_row.pack(fill="x")
 
         def cancel_selected():
@@ -941,35 +954,62 @@ class StoreApp:
         sale_names = [r[0] for r in sales_data]
         sale_qtys  = [r[1] for r in sales_data]
 
-        fig = Figure(figsize=(8, 6), facecolor=CARD_BG)
+        # Daily revenue for line chart
+        from collections import defaultdict
+        daily = defaultdict(float)
+        for s in get_sales():
+            daily[s[4][:10]] += s[3]
+        dates    = sorted(daily.keys())
+        revenues = [daily[d] for d in dates]
 
-        ax1 = fig.add_subplot(211)
+        from matplotlib.gridspec import GridSpec
+        fig = Figure(figsize=(7, 5), facecolor=CARD_BG)
+        gs  = GridSpec(2, 2, figure=fig)
+
+        ax1 = fig.add_subplot(gs[0, 0])
         ax1.set_facecolor("#faf8f4")
         bars1 = ax1.bar(names, stocks, color=PRIMARY, width=0.5, zorder=3)
-        ax1.bar_label(bars1, padding=3, color=TEXT_DARK, fontsize=8, fontweight="bold")
-        ax1.set_title("Stock Levels", fontsize=12, fontweight="bold", color=TEXT_DARK, pad=10)
-        ax1.set_ylabel("Qty", color=TEXT_MUTED, fontsize=9)
-        ax1.tick_params(axis="x", rotation=25, colors=TEXT_DARK, labelsize=8)
-        ax1.tick_params(axis="y", colors=TEXT_MUTED, labelsize=8)
+        ax1.bar_label(bars1, padding=2, color=TEXT_DARK, fontsize=8, fontweight="bold")
+        ax1.set_title("Stock Levels", fontsize=11, fontweight="bold", color=TEXT_DARK, pad=8)
+        ax1.set_ylabel("Qty", color=TEXT_MUTED, fontsize=8)
+        ax1.tick_params(axis="x", rotation=25, colors=TEXT_DARK, labelsize=7)
+        ax1.tick_params(axis="y", colors=TEXT_MUTED, labelsize=7)
         ax1.spines[["top", "right"]].set_visible(False)
-        ax1.yaxis.grid(True, color=BORDER, zorder=0)
+        ax1.yaxis.grid(True, color=BORDER, zorder=0, linewidth=0.5)
 
-        ax2 = fig.add_subplot(212)
+        ax2 = fig.add_subplot(gs[0, 1])
         ax2.set_facecolor("#faf8f4")
         bars2 = ax2.bar(sale_names, sale_qtys, color=SUCCESS, width=0.5, zorder=3)
-        ax2.bar_label(bars2, padding=3, color=TEXT_DARK, fontsize=8, fontweight="bold")
-        ax2.set_title("Units Sold per Product", fontsize=12, fontweight="bold",
-                      color=TEXT_DARK, pad=10)
-        ax2.set_ylabel("Qty Sold", color=TEXT_MUTED, fontsize=9)
-        ax2.tick_params(axis="x", rotation=25, colors=TEXT_DARK, labelsize=8)
-        ax2.tick_params(axis="y", colors=TEXT_MUTED, labelsize=8)
+        ax2.bar_label(bars2, padding=2, color=TEXT_DARK, fontsize=8, fontweight="bold")
+        ax2.set_title("Units Sold per Product", fontsize=11, fontweight="bold",
+                      color=TEXT_DARK, pad=8)
+        ax2.set_ylabel("Qty Sold", color=TEXT_MUTED, fontsize=8)
+        ax2.tick_params(axis="x", rotation=25, colors=TEXT_DARK, labelsize=7)
+        ax2.tick_params(axis="y", colors=TEXT_MUTED, labelsize=7)
         ax2.spines[["top", "right"]].set_visible(False)
-        ax2.yaxis.grid(True, color=BORDER, zorder=0)
+        ax2.yaxis.grid(True, color=BORDER, zorder=0, linewidth=0.5)
 
-        fig.tight_layout(pad=2.5)
+        ax3 = fig.add_subplot(gs[1, :])
+        ax3.set_facecolor("#faf8f4")
+        if dates:
+            ax3.plot(dates, revenues, color=PRIMARY, linewidth=2, marker="o",
+                     markersize=5, markerfacecolor=PRIMARY_DARK, zorder=3)
+            ax3.fill_between(dates, revenues, alpha=0.12, color=PRIMARY)
+        else:
+            ax3.text(0.5, 0.5, "No sales data yet", transform=ax3.transAxes,
+                     ha="center", va="center", color=TEXT_MUTED, fontsize=10)
+        ax3.set_title("Daily Revenue (₺)", fontsize=11, fontweight="bold",
+                      color=TEXT_DARK, pad=8)
+        ax3.set_ylabel("₺", color=TEXT_MUTED, fontsize=8)
+        ax3.tick_params(axis="x", rotation=30, colors=TEXT_DARK, labelsize=7)
+        ax3.tick_params(axis="y", colors=TEXT_MUTED, labelsize=7)
+        ax3.spines[["top", "right"]].set_visible(False)
+        ax3.yaxis.grid(True, color=BORDER, zorder=0, linewidth=0.5)
+
+        fig.tight_layout(pad=1.8)
         canvas = FigureCanvasTkAgg(fig, master=card)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True, padx=20, pady=20)
+        canvas.get_tk_widget().pack(padx=20, pady=20)
 
     # ── Reports list ──────────────────────────────────────────────────────────
 
@@ -1160,7 +1200,7 @@ class StoreApp:
                 delete_user(int(vals[0]))
                 self.show_user_management()
 
-        btn_row = tk.Frame(list_card, bg=CARD_BG, padx=20, pady=(0, 14))
+        btn_row = tk.Frame(list_card, bg=CARD_BG, padx=20)
         btn_row.pack(fill="x")
         self._btn(btn_row, "Delete User", del_user, color=DANGER).pack(side="left")
 
