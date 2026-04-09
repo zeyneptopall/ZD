@@ -46,11 +46,11 @@ def insert_default_users():
     cursor = conn.cursor()
     cursor.execute(
         "INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)",
-        ("admin", "1234", "admin"),
+        ("admin", "admin", "admin"),
     )
     cursor.execute(
         "INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)",
-        ("cashier", "4321", "cashier"),
+        ("cashier", "cashier", "cashier"),
     )
     conn.commit()
     conn.close()

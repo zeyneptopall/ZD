@@ -178,10 +178,10 @@ class StoreApp:
         sb = self.sidebar
 
         # Logo area
-        logo_frame = tk.Frame(sb, bg=SIDEBAR_BG, height=110)
+        logo_frame = tk.Frame(sb, bg=SIDEBAR_BG, height=150)
         logo_frame.pack(fill="x")
         logo_frame.pack_propagate(False)
-        self._sb_logo = self._load_logo(width=130, bg_color=SIDEBAR_BG)
+        self._sb_logo = self._load_logo(width=180, bg_color=SIDEBAR_BG)
         if self._sb_logo:
             tk.Label(logo_frame, image=self._sb_logo,
                      bg=SIDEBAR_BG).pack(pady=12)
@@ -217,22 +217,22 @@ class StoreApp:
         tk.Frame(sb, bg=BORDER, height=1).pack(fill="x", padx=16, side="bottom", pady=6)
         lo = tk.Button(sb, text="  Logout", anchor="w",
                        font=("Arial", 10), bg=SIDEBAR_BG, fg=DANGER,
-                       activebackground="#fff0f0", activeforeground=DANGER,
+                       activebackground="#3d1e1e", activeforeground=DANGER,
                        bd=0, relief="flat", padx=20, pady=12, cursor="hand2",
                        command=self.show_login_screen)
         lo.pack(fill="x", side="bottom")
-        lo.bind("<Enter>", lambda e: lo.config(bg="#fff0f0"))
+        lo.bind("<Enter>", lambda e: lo.config(bg="#3d1e1e"))
         lo.bind("<Leave>", lambda e: lo.config(bg=SIDEBAR_BG))
 
     def _nav_btn(self, parent, text, command):
         b = tk.Button(parent, text=f"  {text}", anchor="w",
-                      font=("Arial", 10), bg=SIDEBAR_BG, fg=SIDEBAR_TEXT,
-                      activebackground=SIDEBAR_HOVER, activeforeground=TEXT_DARK,
+                      font=("Arial", 10), bg=PRIMARY, fg=TEXT_LIGHT,
+                      activebackground=PRIMARY_DARK, activeforeground=TEXT_LIGHT,
                       bd=0, relief="flat", padx=16, pady=11, cursor="hand2",
                       command=command)
         b.pack(fill="x")
-        b.bind("<Enter>", lambda e: b.config(bg=SIDEBAR_HOVER))
-        b.bind("<Leave>", lambda e: b.config(bg=SIDEBAR_BG))
+        b.bind("<Enter>", lambda e: b.config(bg=PRIMARY_DARK))
+        b.bind("<Leave>", lambda e: b.config(bg=PRIMARY))
 
     # ── Login ─────────────────────────────────────────────────────────────────
 
@@ -323,9 +323,13 @@ class StoreApp:
         self.password_entry.bind("<FocusOut>", on_pwd_focus_out)
 
         # Forgot password
-        tk.Label(form_wrap, text="Forgot password?",
-                 font=("Arial", 10), bg=MAIN_BG, fg=PRIMARY,
-                 cursor="hand2").pack(anchor="e", pady=(2, 20))
+        def forgot_password():
+            messagebox.showinfo("Forgot Password", "Please contact your administrator to reset your password.")
+
+        tk.Button(form_wrap, text="Forgot password?",
+                  font=("Arial", 10), bg=MAIN_BG, fg=PRIMARY,
+                  bd=0, relief="flat", cursor="hand2",
+                  command=forgot_password).pack(anchor="e", pady=(2, 20))
 
         # Login button
         self.username_entry.bind("<Return>", lambda _: self.login())
@@ -466,31 +470,6 @@ class StoreApp:
         btn_row.pack(fill="x", pady=(0, 22))
         self._btn(btn_row, "+ Add New Product", add_action, color=PRIMARY).pack(side="left", padx=(0, 10))
 
-        def quick_delete():
-            prods = get_products()
-            if not prods:
-                messagebox.showinfo("Info", "No products found.")
-                return
-            dlg = tk.Toplevel(self.root)
-            dlg.title("Delete Product")
-            dlg.geometry("320x160")
-            dlg.configure(bg=CARD_BG)
-            dlg.grab_set()
-            tk.Label(dlg, text="Select product to delete:", font=("Arial", 10, "bold"),
-                     bg=CARD_BG, fg=TEXT_DARK).pack(pady=(16, 6), padx=20, anchor="w")
-            names = [f"{p[0]} — {p[1]} ({p[3]:.2f} ₺)" for p in prods]
-            var = tk.StringVar(value=names[0])
-            ttk.Combobox(dlg, textvariable=var, values=names,
-                         state="readonly", width=34).pack(padx=20)
-            def do_delete():
-                pid = int(var.get().split("—")[0].strip())
-                if messagebox.askyesno("Confirm", "Delete this product?"):
-                    delete_product(pid)
-                    dlg.destroy()
-                    self.show_manage_products()
-            self._btn(dlg, "Delete", do_delete, color=DANGER).pack(pady=14)
-
-        self._btn(btn_row, "Delete Product", quick_delete, color=DANGER).pack(side="left")
 
         # Products table
         list_card = self._card(c)
@@ -704,13 +683,20 @@ class StoreApp:
                 def make_add(prod=p):
                     def add_to_cart():
                         pid = prod[0]
+                        current = next((pp for pp in get_products() if pp[0] == pid), None)
+                        if current is None:
+                            messagebox.showwarning("Stock", "Product not found.")
+                            return
                         if pid in self.cart:
-                            if self.cart[pid]["qty"] >= prod[4]:
+                            if self.cart[pid]["qty"] >= current[4]:
                                 messagebox.showwarning("Stock", "Not enough stock.")
                                 return
                             self.cart[pid]["qty"] += 1
                         else:
-                            self.cart[pid] = {"name": prod[1], "price": prod[3], "qty": 1}
+                            if current[4] < 1:
+                                messagebox.showwarning("Stock", "Not enough stock.")
+                                return
+                            self.cart[pid] = {"name": current[1], "price": current[3], "qty": 1}
                         refresh_cart()
                     return add_to_cart
 
@@ -771,7 +757,7 @@ class StoreApp:
                         refresh_cart()
                     return dec
 
-                def make_inc(p=pid, prod_stock=None):
+                def make_inc(p=pid):
                     def inc():
                         # find current stock
                         prods = get_products()
@@ -889,8 +875,12 @@ class StoreApp:
         def apply_filter():
             s = start_e.get().strip()
             e = end_e.get().strip()
-            load_sales(None if s == "YYYY-MM-DD" else s,
-                       None if e == "YYYY-MM-DD" else e)
+            s = None if s == "YYYY-MM-DD" else s
+            e = None if e == "YYYY-MM-DD" else e
+            if bool(s) != bool(e):
+                messagebox.showwarning("Filter", "Please enter both From and To dates.")
+                return
+            load_sales(s, e)
 
         def clear_filter():
             for entry, placeholder in [(start_e, "YYYY-MM-DD"), (end_e, "YYYY-MM-DD")]:
