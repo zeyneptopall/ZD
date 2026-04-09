@@ -660,12 +660,10 @@ class StoreApp:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        products = get_products()
-
         def render_products(filter_text=""):
             for w in scroll_frame.winfo_children():
                 w.destroy()
-            filtered = [p for p in products
+            filtered = [p for p in get_products()
                         if filter_text.lower() in p[1].lower() or
                         filter_text.lower() in (p[2] or "").lower()]
             for p in filtered:
@@ -793,17 +791,21 @@ class StoreApp:
                 messagebox.showwarning("Cart", "Cart is empty.")
                 return
             errors = []
-            for pid, item in self.cart.items():
+            sold = []
+            for pid, item in list(self.cart.items()):
                 result = record_sale(pid, item["qty"], sold_by=self.current_user)
                 if result != "Sale recorded successfully":
                     errors.append(f"{item['name']}: {result}")
+                else:
+                    sold.append(pid)
+            for pid in sold:
+                del self.cart[pid]
             if errors:
                 messagebox.showerror("Errors", "\n".join(errors))
             else:
                 messagebox.showinfo("Success", "Sale completed successfully!")
-                self.cart = {}
-                refresh_cart()
-                render_products(search_var.get())
+            refresh_cart()
+            render_products(search_var.get())
 
         self._btn(cart_card, "Complete Sale", complete_sale,
                   color=PRIMARY).pack(fill="x", padx=14, pady=(0, 14), ipady=6)
