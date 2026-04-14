@@ -1,1205 +1,601 @@
-import tkinter as tk
-from tkinter import messagebox, ttk, filedialog
+import os
 import csv
-from PIL import Image, ImageTk
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
 from database import (
-    create_database,
-    insert_default_users,
-    check_user,
-    add_product,
-    get_products,
-    update_product,
-    delete_product,
-    get_sales,
-    get_sales_summary,
-    get_sales_by_product,
-    record_sale,
-    cancel_sale,
-    get_users,
-    add_user,
-    delete_user,
+    create_database, insert_default_users, check_user,
+    add_product, get_products, update_product, delete_product,
+    get_sales, get_sales_summary, record_sale, cancel_sale,
 )
 
-# ── Colour palette ────────────────────────────────────────────────────────────
-MAIN_BG       = "#f5f0e8"
-SIDEBAR_BG    = "#ffffff"
-SIDEBAR_HOVER = "#fdf6ec"
-CARD_BG       = "#ffffff"
-PRIMARY       = "#c9a96e"   # gold
-PRIMARY_DARK  = "#a8823d"
-SUCCESS       = "#6aaa64"
-WARNING       = "#e8a838"
-DANGER        = "#e06464"
-TEXT_DARK     = "#2c2417"
-TEXT_MUTED    = "#8c7b6b"
-TEXT_LIGHT    = "#ffffff"
-BORDER        = "#e8dfd0"
-SIDEBAR_TEXT  = "#5c4a32"
+root = None
+content_frame = None
+current_user = ""
+cart = {}
 
-LOW_STOCK_THRESHOLD = 5
-LOGO_PATH = "WhatsApp Image 2026-04-06 at 15.43.14.jpeg"
-# ─────────────────────────────────────────────────────────────────────────────
+BG = "#f5f0e8"
+CARD = "#ffffff"
+PRIMARY = "#c9a96e"
+PRIMARY_DARK = "#a8823d"
+TEXT = "#2c2417"
 
+def clear_content():
+    for w in content_frame.winfo_children():
+        w.destroy()
 
-class StoreApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("StockStyle — Store Management")
-        self.root.geometry("1150x720")
-        self.root.minsize(950, 620)
-        self.root.configure(bg=MAIN_BG)
+def clear_all():
+    for w in root.winfo_children():
+        w.destroy()
 
-        self.sidebar      = None
-        self.content_area = None
-        self.current_user = None
-        self.current_role = None
-        self._logo_photo  = None
-        self._sb_logo     = None
+def make_table(parent, columns, widths, height=10):
+    frame = tk.Frame(parent)
+    frame.pack(fill="both", expand=True, padx=20, pady=5)
+    tree = ttk.Treeview(frame, columns=columns, show="headings", height=height)
+    for col, w in zip(columns, widths):
+        tree.heading(col, text=col)
+        tree.column(col, anchor="center", width=w)
+    sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=sb.set)
+    tree.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
+    return tree
 
-        # Cart state for cashier
-        self.cart = {}   # {product_id: {"name": ..., "price": ..., "qty": ...}}
+def show_login():
+    global current_user, cart
+    current_user = ""
+    cart = {}
+    clear_all()
 
-        self._style_ttk()
-        self.show_login_screen()
+    frame = tk.Frame(root, bg=BG)
+    frame.place(relx=0.5, rely=0.5, anchor="center")
 
-    # ── TTK styling ───────────────────────────────────────────────────────────
+    tk.Label(frame, text="StockStyle",
+             font=("Arial", 18, "bold"), bg=BG, fg=TEXT).pack(pady=(0, 20))
 
-    def _style_ttk(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview",
-                        background=CARD_BG, foreground=TEXT_DARK,
-                        rowheight=28, fieldbackground=CARD_BG,
-                        font=("Arial", 10))
-        style.configure("Treeview.Heading",
-                        background=PRIMARY, foreground=TEXT_LIGHT,
-                        font=("Arial", 10, "bold"), relief="flat")
-        style.map("Treeview", background=[("selected", PRIMARY)],
-                              foreground=[("selected", TEXT_LIGHT)])
-        style.configure("TCombobox", padding=5)
-        style.configure("Gold.TButton",
-                        background=PRIMARY, foreground=TEXT_LIGHT,
-                        font=("Arial", 10, "bold"))
+    tk.Label(frame, text="Username:", bg=BG, font=("Arial", 10)).pack(anchor="w")
+    username_entry = tk.Entry(frame, font=("Arial", 11), width=25)
+    username_entry.pack(pady=(0, 10))
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    tk.Label(frame, text="Password:", bg=BG, font=("Arial", 10)).pack(anchor="w")
+    password_entry = tk.Entry(frame, font=("Arial", 11), width=25, show="*")
+    password_entry.pack(pady=(0, 15))
 
-    def _clear_root(self):
-        for w in self.root.winfo_children():
-            w.destroy()
-        self.sidebar = self.content_area = None
-
-    def _clear_content(self):
-        if self.content_area:
-            for w in self.content_area.winfo_children():
-                w.destroy()
-
-    @staticmethod
-    def _darken(hex_color, factor=0.88):
-        h = hex_color.lstrip("#")
-        r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
-        return "#{:02x}{:02x}{:02x}".format(int(r*factor), int(g*factor), int(b*factor))
-
-    def _btn(self, parent, text, command, color=None, fg=TEXT_LIGHT, **kw):
-        if color is None:
-            color = PRIMARY
-        b = tk.Button(parent, text=text, command=command,
-                      bg=color, fg=fg, activebackground=self._darken(color),
-                      activeforeground=fg, font=("Arial", 10, "bold"),
-                      bd=0, relief="flat", padx=18, pady=8, cursor="hand2", **kw)
-        b.bind("<Enter>", lambda e: b.config(bg=self._darken(color)))
-        b.bind("<Leave>", lambda e: b.config(bg=color))
-        return b
-
-    def _card(self, parent, **kw):
-        return tk.Frame(parent, bg=CARD_BG, bd=0,
-                        highlightthickness=1, highlightbackground=BORDER, **kw)
-
-    def _page_title(self, parent, text, subtitle=""):
-        hdr = tk.Frame(parent, bg=MAIN_BG)
-        hdr.pack(fill="x", padx=30, pady=(24, 0))
-        tk.Label(hdr, text=text, font=("Georgia", 20, "bold"),
-                 bg=MAIN_BG, fg=TEXT_DARK).pack(anchor="w")
-        if subtitle:
-            tk.Label(hdr, text=subtitle, font=("Arial", 10),
-                     bg=MAIN_BG, fg=TEXT_MUTED).pack(anchor="w", pady=(2, 0))
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=30, pady=(10, 18))
-
-    def _stat_card(self, parent, label, value, color=PRIMARY):
-        f = tk.Frame(parent, bg=CARD_BG, padx=22, pady=16,
-                     highlightthickness=1, highlightbackground=BORDER)
-        f.pack(side="left", padx=(0, 14), fill="x", expand=True)
-        tk.Label(f, text=label, font=("Arial", 9), bg=CARD_BG, fg=TEXT_MUTED).pack(anchor="w")
-        tk.Label(f, text=value, font=("Arial", 18, "bold"),
-                 bg=CARD_BG, fg=color).pack(anchor="w", pady=(4, 0))
-        return f
-
-    def _load_logo(self, width=140, bg_color=None):
-        try:
-            img = Image.open(LOGO_PATH).convert("RGBA")
-            # Replace white/near-white pixels with the given background color
-            if bg_color:
-                r_bg, g_bg, b_bg = (int(bg_color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
-                data = img.getdata()
-                new_data = []
-                for r, g, b, a in data:
-                    if r > 220 and g > 215 and b > 205:
-                        new_data.append((r_bg, g_bg, b_bg, 255))
-                    else:
-                        new_data.append((r, g, b, a))
-                img.putdata(new_data)
-            img = img.convert("RGB")
-            ratio = width / img.width
-            img = img.resize((width, int(img.height * ratio)), Image.LANCZOS)
-            return ImageTk.PhotoImage(img)
-        except Exception:
-            return None
-
-    # ── Sidebar layout ────────────────────────────────────────────────────────
-
-    def _setup_layout(self, role):
-        self._clear_root()
-        self.current_role = role
-        self.cart = {}
-
-        outer = tk.Frame(self.root, bg=MAIN_BG)
-        outer.pack(fill="both", expand=True)
-
-        self.sidebar = tk.Frame(outer, bg=SIDEBAR_BG, width=210,
-                                highlightthickness=1, highlightbackground=BORDER)
-        self.sidebar.pack(side="left", fill="y")
-        self.sidebar.pack_propagate(False)
-
-        self.content_area = tk.Frame(outer, bg=MAIN_BG)
-        self.content_area.pack(side="left", fill="both", expand=True)
-
-        self._build_sidebar(role)
-
-    def _build_sidebar(self, role):
-        sb = self.sidebar
-
-        # Logo area
-        logo_frame = tk.Frame(sb, bg=SIDEBAR_BG, height=150)
-        logo_frame.pack(fill="x")
-        logo_frame.pack_propagate(False)
-        self._sb_logo = self._load_logo(width=180, bg_color=SIDEBAR_BG)
-        if self._sb_logo:
-            tk.Label(logo_frame, image=self._sb_logo,
-                     bg=SIDEBAR_BG).pack(pady=12)
-        else:
-            tk.Label(logo_frame, text="StockStyle",
-                     font=("Georgia", 16, "bold"),
-                     bg=SIDEBAR_BG, fg=PRIMARY).pack(pady=30)
-
-        tk.Frame(sb, bg=BORDER, height=1).pack(fill="x", padx=16, pady=2)
-
-        # Nav items
-        if role == "admin":
-            items = [
-                ("Dashboard",        self.show_dashboard),
-                ("Manage Products",  self.show_manage_products),
-                ("Sales",            self.show_sales_screen),
-                ("Charts",           self.show_reports_screen),
-                ("Reports",          self.show_reports_list),
-                ("Export Data",      self.show_export_screen),
-                ("User Management",  self.show_user_management),
-            ]
-        else:
-            items = [
-                ("Dashboard",    self.show_dashboard),
-                ("Products",     self.show_products_screen),
-                ("Sales / Cart", self.show_cashier_cart),
-            ]
-
-        for text, cmd in items:
-            self._nav_btn(sb, text, cmd)
-
-        # Logout
-        tk.Frame(sb, bg=BORDER, height=1).pack(fill="x", padx=16, side="bottom", pady=6)
-        lo = tk.Button(sb, text="  Logout", anchor="w",
-                       font=("Arial", 10), bg=SIDEBAR_BG, fg=DANGER,
-                       activebackground="#3d1e1e", activeforeground=DANGER,
-                       bd=0, relief="flat", padx=20, pady=12, cursor="hand2",
-                       command=self.show_login_screen)
-        lo.pack(fill="x", side="bottom")
-        lo.bind("<Enter>", lambda e: lo.config(bg="#3d1e1e"))
-        lo.bind("<Leave>", lambda e: lo.config(bg=SIDEBAR_BG))
-
-    def _nav_btn(self, parent, text, command):
-        b = tk.Button(parent, text=f"  {text}", anchor="w",
-                      font=("Arial", 10), bg=PRIMARY, fg=TEXT_LIGHT,
-                      activebackground=PRIMARY_DARK, activeforeground=TEXT_LIGHT,
-                      bd=0, relief="flat", padx=16, pady=11, cursor="hand2",
-                      command=command)
-        b.pack(fill="x")
-        b.bind("<Enter>", lambda e: b.config(bg=PRIMARY_DARK))
-        b.bind("<Leave>", lambda e: b.config(bg=PRIMARY))
-
-    # ── Login ─────────────────────────────────────────────────────────────────
-
-    def show_login_screen(self):
-        self._clear_root()
-        self.root.configure(bg=MAIN_BG)
-
-        outer = tk.Frame(self.root, bg=MAIN_BG)
-        outer.pack(fill="both", expand=True)
-
-        # ── Left: logo centered ──────────────────────────────────────────────
-        left = tk.Frame(outer, bg=MAIN_BG)
-        left.pack(side="left", fill="both", expand=True)
-
-        logo_wrap = tk.Frame(left, bg=MAIN_BG)
-        logo_wrap.place(relx=0.65, rely=0.5, anchor="center")
-
-        logo_ph = self._load_logo(width=420, bg_color=MAIN_BG)
-        if logo_ph:
-            self._logo_photo = logo_ph
-            tk.Label(logo_wrap, image=self._logo_photo, bg=MAIN_BG).pack()
-        else:
-            tk.Label(logo_wrap, text="Stock", font=("Georgia", 36, "bold"),
-                     bg=MAIN_BG, fg=TEXT_DARK).pack()
-            tk.Label(logo_wrap, text="Style", font=("Georgia", 36, "bold"),
-                     bg=MAIN_BG, fg=PRIMARY).pack()
-
-        # ── Right: login form ────────────────────────────────────────────────
-        right = tk.Frame(outer, bg=MAIN_BG)
-        right.pack(side="right", fill="both", expand=True)
-
-        form_wrap = tk.Frame(right, bg=MAIN_BG)
-        form_wrap.place(relx=0.5, rely=0.5, anchor="center")
-
-        tk.Label(form_wrap, text="Log in",
-                 font=("Georgia", 30, "bold"),
-                 bg=MAIN_BG, fg=TEXT_DARK).pack(anchor="w", pady=(0, 28))
-
-        # Email field
-        email_frame = tk.Frame(form_wrap, bg=CARD_BG,
-                               highlightthickness=1, highlightbackground=BORDER)
-        email_frame.pack(fill="x", pady=(0, 12), ipady=2)
-        tk.Label(email_frame, text=" ✉  ", font=("Arial", 12),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(10, 0))
-        self.username_entry = tk.Entry(email_frame, font=("Arial", 11), width=28,
-                                       bg=CARD_BG, fg=TEXT_MUTED, relief="flat",
-                                       insertbackground=TEXT_DARK)
-        self.username_entry.insert(0, "Email")
-        self.username_entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(4, 10))
-
-        def on_email_focus_in(e):
-            if self.username_entry.get() == "Email":
-                self.username_entry.delete(0, tk.END)
-                self.username_entry.config(fg=TEXT_DARK)
-
-        def on_email_focus_out(e):
-            if not self.username_entry.get():
-                self.username_entry.insert(0, "Email")
-                self.username_entry.config(fg=TEXT_MUTED)
-
-        self.username_entry.bind("<FocusIn>",  on_email_focus_in)
-        self.username_entry.bind("<FocusOut>", on_email_focus_out)
-
-        # Password field
-        pwd_frame = tk.Frame(form_wrap, bg=CARD_BG,
-                             highlightthickness=1, highlightbackground=BORDER)
-        pwd_frame.pack(fill="x", pady=(0, 6), ipady=2)
-        tk.Label(pwd_frame, text=" 🔒  ", font=("Arial", 11),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(10, 0))
-        self.password_entry = tk.Entry(pwd_frame, font=("Arial", 11), width=28,
-                                        bg=CARD_BG, fg=TEXT_MUTED, relief="flat",
-                                        insertbackground=TEXT_DARK)
-        self.password_entry.insert(0, "Password")
-        self.password_entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(4, 10))
-
-        def on_pwd_focus_in(e):
-            if self.password_entry.get() == "Password":
-                self.password_entry.delete(0, tk.END)
-                self.password_entry.config(show="*", fg=TEXT_DARK)
-
-        def on_pwd_focus_out(e):
-            if not self.password_entry.get():
-                self.password_entry.config(show="")
-                self.password_entry.insert(0, "Password")
-                self.password_entry.config(fg=TEXT_MUTED)
-
-        self.password_entry.bind("<FocusIn>",  on_pwd_focus_in)
-        self.password_entry.bind("<FocusOut>", on_pwd_focus_out)
-
-        # Forgot password
-        def forgot_password():
-            messagebox.showinfo("Forgot Password", "Please contact your administrator to reset your password.")
-
-        tk.Button(form_wrap, text="Forgot password?",
-                  font=("Arial", 10), bg=MAIN_BG, fg=PRIMARY,
-                  bd=0, relief="flat", cursor="hand2",
-                  command=forgot_password).pack(anchor="e", pady=(2, 20))
-
-        # Login button
-        self.username_entry.bind("<Return>", lambda _: self.login())
-        self.password_entry.bind("<Return>", lambda _: self.login())
-
-        login_btn = tk.Button(form_wrap, text="Log in",
-                              command=self.login,
-                              font=("Arial", 12, "bold"),
-                              bg=PRIMARY, fg=TEXT_LIGHT,
-                              activebackground=PRIMARY_DARK,
-                              activeforeground=TEXT_LIGHT,
-                              bd=0, relief="flat", cursor="hand2",
-                              width=32, pady=12)
-        login_btn.pack(fill="x")
-        login_btn.bind("<Enter>", lambda e: login_btn.config(bg=PRIMARY_DARK))
-        login_btn.bind("<Leave>", lambda e: login_btn.config(bg=PRIMARY))
-
-    def login(self):
-        username = self.username_entry.get().strip()
-        password = self.password_entry.get().strip()
-        if username == "Email":
-            username = ""
-        if password == "Password":
-            password = ""
+    def do_login():
+        global current_user
+        username = username_entry.get().strip()
+        password = password_entry.get().strip()
+        if not username or not password:
+            messagebox.showwarning("Warning", "Username and password cannot be empty!")
+            return
         role = check_user(username, password)
-        if role == "admin":
-            self.current_user = username
-            self._setup_layout("admin")
-            self.show_dashboard()
-        elif role == "cashier":
-            self.current_user = username
-            self._setup_layout("cashier")
-            self.show_dashboard()
+        if role:
+            current_user = username
+            setup_main(role)
         else:
-            messagebox.showerror("Login Failed", "Invalid username or password.")
-
-    # ── Dashboard ─────────────────────────────────────────────────────────────
-
-    def show_dashboard(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, f"Welcome, {self.current_user.capitalize()}",
-                         "Here's an overview of your stock & sales performance.")
-
-        # Stat cards
-        total_rev, total_cnt, top_name, top_qty = get_sales_summary()
-        products = get_products()
-
-        strip = tk.Frame(c, bg=MAIN_BG)
-        strip.pack(fill="x", padx=30, pady=(0, 20))
-
-        self._stat_card(strip, "Total Products", str(len(products)), color=PRIMARY)
-        self._stat_card(strip, "Total Sales",    str(total_cnt),     color="#3b82f6")
-        self._stat_card(strip, "Total Revenue",  f"{total_rev:.2f} ₺", color=SUCCESS)
-        self._stat_card(strip, "Top Product",    top_name,           color=WARNING)
-
-        # Recent sales
-        recent_card = self._card(c)
-        recent_card.pack(padx=30, fill="both", expand=True)
-
-        hdr = tk.Frame(recent_card, bg=CARD_BG, padx=20, pady=14)
-        hdr.pack(fill="x")
-        tk.Label(hdr, text="Recent Sales", font=("Arial", 13, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).pack(side="left")
-
-        tf = tk.Frame(recent_card, bg=CARD_BG)
-        tf.pack(fill="both", expand=True, padx=20, pady=(0, 16))
-
-        cols = ("ID", "Product ID", "Qty", "Total", "Date", "Sold By")
-        tree = ttk.Treeview(tf, columns=cols, show="headings", height=10)
-        for col, w in zip(cols, [60, 90, 60, 110, 180, 110]):
-            tree.heading(col, text=col)
-            tree.column(col, anchor="center", width=w)
-        sb = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
-        for s in reversed(get_sales()[-20:]):
-            tree.insert("", tk.END, values=s)
-
-    # ── Manage Products ───────────────────────────────────────────────────────
-
-    def show_manage_products(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Manage Products")
-
-
-        # Add form
-        card = self._card(c)
-        card.pack(padx=30, fill="x")
-
-        form = tk.Frame(card, bg=CARD_BG, padx=30, pady=26)
-        form.pack(fill="x")
-
-        tk.Label(form, text="Add New Product", font=("Arial", 12, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).grid(
-                     row=0, column=0, columnspan=4, sticky="w", pady=(0, 16))
-
-        field_defs = [("Product Name", "name"), ("Category", "cat"),
-                      ("Price (₺)", "price"), ("Stock Qty", "stock")]
-        entries = {}
-        for i, (lbl, key) in enumerate(field_defs):
-            col = (i % 2) * 2
-            row = (i // 2) * 2 + 1
-            tk.Label(form, text=lbl, font=("Arial", 10, "bold"),
-                     bg=CARD_BG, fg=TEXT_DARK).grid(
-                         row=row, column=col, sticky="w", padx=(0, 40), pady=(8, 2))
-            e = tk.Entry(form, font=("Arial", 10), width=26,
-                         bg="#faf8f4", fg=TEXT_DARK, relief="solid", bd=1,
-                         insertbackground=TEXT_DARK)
-            e.grid(row=row+1, column=col, sticky="ew", padx=(0, 40), ipady=6)
-            entries[key] = e
-
-        def add_action():
-            name, cat = entries["name"].get().strip(), entries["cat"].get().strip()
-            price_t, stock_t = entries["price"].get().strip(), entries["stock"].get().strip()
-            if not name:
-                messagebox.showerror("Validation", "Name is required.")
-                return
-            try:
-                price = float(price_t) if price_t else 0.0
-            except ValueError:
-                messagebox.showerror("Validation", "Price must be a number.")
-                return
-            try:
-                stock = int(stock_t) if stock_t else 0
-            except ValueError:
-                messagebox.showerror("Validation", "Stock must be an integer.")
-                return
-            add_product(name, cat, price, stock)
-            messagebox.showinfo("Success", f'"{name}" added successfully.')
-            for e in entries.values():
-                e.delete(0, tk.END)
-
-        btn_row = tk.Frame(card, bg=CARD_BG, padx=30)
-        btn_row.pack(fill="x", pady=(0, 22))
-        self._btn(btn_row, "+ Add New Product", add_action, color=PRIMARY).pack(side="left", padx=(0, 10))
-
-
-        # Products table
-        list_card = self._card(c)
-        list_card.pack(padx=30, pady=(16, 0), fill="both", expand=True)
-
-        hdr_row = tk.Frame(list_card, bg=CARD_BG, padx=20, pady=12)
-        hdr_row.pack(fill="x")
-        tk.Label(hdr_row, text="All Products", font=("Arial", 12, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).pack(side="left")
-
-        tf = tk.Frame(list_card, bg=CARD_BG)
-        tf.pack(fill="both", expand=True, padx=20, pady=(0, 8))
-
-        cols = ("ID", "Name", "Category", "Price", "Stock", "Actions")
-        tree = ttk.Treeview(tf, columns=cols, show="headings", height=8)
-        for col, w in zip(cols, [50, 180, 140, 100, 80, 120]):
-            tree.heading(col, text=col)
-            tree.column(col, anchor="center", width=w)
-        tree.tag_configure("low_stock", background="#fef3c7", foreground="#92400e")
-
-        sb2 = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=sb2.set)
-        tree.pack(side="left", fill="both", expand=True)
-        sb2.pack(side="right", fill="y")
-
-        def load_products():
-            tree.delete(*tree.get_children())
-            for p in get_products():
-                tag = ("low_stock",) if p[4] <= LOW_STOCK_THRESHOLD else ()
-                tree.insert("", tk.END,
-                            values=(p[0], p[1], p[2], f"{p[3]:.2f} ₺", p[4], "Edit | Delete"),
-                            tags=tag)
-
-        load_products()
-
-        def edit_product():
-            sel = tree.focus()
-            if not sel:
-                messagebox.showwarning("Select", "Please select a product.")
-                return
-            vals = tree.item(sel, "values")
-            pid = int(vals[0])
-
-            dlg = tk.Toplevel(self.root)
-            dlg.title("Edit Product")
-            dlg.geometry("360x300")
-            dlg.configure(bg=CARD_BG)
-            dlg.grab_set()
-
-            fields = [("Name", vals[1]), ("Category", vals[2]),
-                      ("Price", vals[3].replace(" ₺", "")), ("Stock", vals[4])]
-            d_entries = {}
-            for i, (lbl, val) in enumerate(fields):
-                tk.Label(dlg, text=lbl, font=("Arial", 10, "bold"),
-                         bg=CARD_BG, fg=TEXT_DARK).grid(
-                             row=i*2, column=0, sticky="w", padx=24, pady=(14, 2))
-                e = tk.Entry(dlg, font=("Arial", 10), width=28,
-                             bg="#faf8f4", fg=TEXT_DARK, relief="solid", bd=1,
-                             insertbackground=TEXT_DARK)
-                e.insert(0, val)
-                e.grid(row=i*2+1, column=0, padx=24, sticky="ew", ipady=5)
-                d_entries[lbl] = e
-
-            def save():
-                try:
-                    np = float(d_entries["Price"].get().strip())
-                    ns = int(d_entries["Stock"].get().strip())
-                except ValueError:
-                    messagebox.showerror("Validation", "Invalid price or stock.")
-                    return
-                update_product(pid, d_entries["Name"].get().strip(),
-                               d_entries["Category"].get().strip(), np, ns)
-                dlg.destroy()
-                load_products()
-
-            self._btn(dlg, "Save Changes", save, color=PRIMARY).grid(
-                row=len(fields)*2, column=0, pady=16, padx=24, sticky="ew", ipady=4)
-
-        def del_product():
-            sel = tree.focus()
-            if not sel:
-                messagebox.showwarning("Select", "Please select a product.")
-                return
-            vals = tree.item(sel, "values")
-            if messagebox.askyesno("Confirm", f'Delete "{vals[1]}"?'):
-                delete_product(int(vals[0]))
-                load_products()
-
-        act_row = tk.Frame(list_card, bg=CARD_BG, padx=20)
-        act_row.pack(fill="x")
-        self._btn(act_row, "Edit", edit_product, color=WARNING, fg=TEXT_DARK).pack(side="left", padx=(0, 10))
-        self._btn(act_row, "Delete", del_product, color=DANGER).pack(side="left")
-
-    # ── Products (view only) ──────────────────────────────────────────────────
-
-    def show_products_screen(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Products")
-
-        products = get_products()
-        low = [p for p in products if p[4] <= LOW_STOCK_THRESHOLD]
-        if low:
-            banner = tk.Frame(c, bg="#fef3c7",
-                              highlightthickness=1, highlightbackground="#fbbf24")
-            banner.pack(fill="x", padx=30, pady=(0, 12))
-            tk.Label(banner,
-                     text=f"  ⚠  {len(low)} product(s) have low stock (≤ {LOW_STOCK_THRESHOLD})",
-                     font=("Arial", 10, "bold"), bg="#fef3c7", fg="#92400e",
-                     pady=8).pack(anchor="w")
-
-        card = self._card(c)
-        card.pack(padx=30, fill="both", expand=True)
-
-        search_frame = tk.Frame(card, bg=CARD_BG, padx=20, pady=12)
-        search_frame.pack(fill="x")
-        tk.Label(search_frame, text="Search:", font=("Arial", 10, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).pack(side="left", padx=(0, 8))
-        search_var = tk.StringVar()
-        tk.Entry(search_frame, textvariable=search_var, font=("Arial", 10), width=30,
-                 bg="#faf8f4", fg=TEXT_DARK, relief="solid", bd=1,
-                 insertbackground=TEXT_DARK).pack(side="left", ipady=4)
-
-        tf = tk.Frame(card, bg=CARD_BG)
-        tf.pack(fill="both", expand=True, padx=20, pady=(0, 16))
-
-        cols = ("ID", "Name", "Category", "Price", "Stock")
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
-        for col, w in zip(cols, [60, 200, 160, 110, 80]):
-            tree.heading(col, text=col)
-            tree.column(col, anchor="center", width=w)
-        tree.tag_configure("low_stock", background="#fef3c7", foreground="#92400e")
-
-        sb = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
-        def load(filter_text=""):
-            tree.delete(*tree.get_children())
-            for p in products:
-                if filter_text.lower() in p[1].lower() or \
-                   filter_text.lower() in (p[2] or "").lower():
-                    tag = ("low_stock",) if p[4] <= LOW_STOCK_THRESHOLD else ()
-                    tree.insert("", tk.END,
-                                values=(p[0], p[1], p[2], f"{p[3]:.2f} ₺", p[4]),
-                                tags=tag)
-
-        load()
-        search_var.trace_add("write", lambda *_: load(search_var.get()))
-
-    # ── Cashier Cart ──────────────────────────────────────────────────────────
-
-    def show_cashier_cart(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Sales / Cart")
-
-        outer = tk.Frame(c, bg=MAIN_BG)
-        outer.pack(fill="both", expand=True, padx=30, pady=(0, 20))
-
-        # Left: product list
-        left = tk.Frame(outer, bg=MAIN_BG)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 14))
-
-        search_frame = tk.Frame(left, bg=MAIN_BG)
-        search_frame.pack(fill="x", pady=(0, 10))
-        search_var = tk.StringVar()
-        tk.Entry(search_frame, textvariable=search_var, font=("Arial", 10), width=30,
-                 bg=CARD_BG, fg=TEXT_DARK, relief="solid", bd=1,
-                 insertbackground=TEXT_DARK,
-                 ).pack(side="left", fill="x", expand=True, ipady=6)
-
-        product_list_frame = self._card(left)
-        product_list_frame.pack(fill="both", expand=True)
-
-        pl_inner = tk.Frame(product_list_frame, bg=CARD_BG)
-        pl_inner.pack(fill="both", expand=True, padx=12, pady=12)
-
-        canvas = tk.Canvas(pl_inner, bg=CARD_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(pl_inner, orient="vertical", command=canvas.yview)
-        scroll_frame = tk.Frame(canvas, bg=CARD_BG)
-
-        scroll_frame.bind("<Configure>",
-                          lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        def render_products(filter_text=""):
-            for w in scroll_frame.winfo_children():
-                w.destroy()
-            filtered = [p for p in get_products()
-                        if filter_text.lower() in p[1].lower() or
-                        filter_text.lower() in (p[2] or "").lower()]
-            for p in filtered:
-                row = tk.Frame(scroll_frame, bg=CARD_BG, pady=6,
-                               highlightthickness=1, highlightbackground=BORDER)
-                row.pack(fill="x", pady=3, padx=4)
-
-                info = tk.Frame(row, bg=CARD_BG)
-                info.pack(side="left", fill="x", expand=True, padx=10)
-                tk.Label(info, text=p[1], font=("Arial", 10, "bold"),
-                         bg=CARD_BG, fg=TEXT_DARK).pack(anchor="w")
-                tk.Label(info, text=f"{p[3]:.2f} ₺  |  {p[4]} in stock",
-                         font=("Arial", 9), bg=CARD_BG, fg=TEXT_MUTED).pack(anchor="w")
-
-                def make_add(prod=p):
-                    def add_to_cart():
-                        pid = prod[0]
-                        current = next((pp for pp in get_products() if pp[0] == pid), None)
-                        if current is None:
-                            messagebox.showwarning("Stock", "Product not found.")
-                            return
-                        if pid in self.cart:
-                            if self.cart[pid]["qty"] >= current[4]:
-                                messagebox.showwarning("Stock", "Not enough stock.")
-                                return
-                            self.cart[pid]["qty"] += 1
-                        else:
-                            if current[4] < 1:
-                                messagebox.showwarning("Stock", "Not enough stock.")
-                                return
-                            self.cart[pid] = {"name": current[1], "price": current[3], "qty": 1}
-                        refresh_cart()
-                    return add_to_cart
-
-                self._btn(row, "Add", make_add(), color=PRIMARY,
-                          padx=12, pady=4).pack(side="right", padx=10)
-
-        search_var.trace_add("write", lambda *_: render_products(search_var.get()))
-        render_products()
-
-        # Right: cart
-        right = tk.Frame(outer, bg=MAIN_BG, width=280)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
-
-        cart_card = self._card(right)
-        cart_card.pack(fill="both", expand=True)
-
-        cart_hdr = tk.Frame(cart_card, bg=CARD_BG, padx=16, pady=12)
-        cart_hdr.pack(fill="x")
-        tk.Label(cart_hdr, text="Cart", font=("Arial", 13, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).pack(side="left")
-
-        cart_body = tk.Frame(cart_card, bg=CARD_BG)
-        cart_body.pack(fill="both", expand=True, padx=14, pady=6)
-
-        total_lbl = tk.Label(cart_card, text="Total  $0.00",
-                             font=("Arial", 14, "bold"),
-                             bg=CARD_BG, fg=TEXT_DARK)
-        total_lbl.pack(pady=(4, 8))
-
-        def refresh_cart():
-            for w in cart_body.winfo_children():
-                w.destroy()
-            total = 0.0
-            for pid, item in self.cart.items():
-                subtotal = item["price"] * item["qty"]
-                total += subtotal
-
-                row = tk.Frame(cart_body, bg=CARD_BG)
-                row.pack(fill="x", pady=4)
-
-                info = tk.Frame(row, bg=CARD_BG)
-                info.pack(side="left", fill="x", expand=True)
-                tk.Label(info, text=item["name"], font=("Arial", 9, "bold"),
-                         bg=CARD_BG, fg=TEXT_DARK).pack(anchor="w")
-                tk.Label(info, text=f"{item['price']:.2f} ₺",
-                         font=("Arial", 9), bg=CARD_BG, fg=TEXT_MUTED).pack(anchor="w")
-
-                qty_frame = tk.Frame(row, bg=CARD_BG)
-                qty_frame.pack(side="right")
-
-                def make_dec(p=pid):
-                    def dec():
-                        if self.cart[p]["qty"] > 1:
-                            self.cart[p]["qty"] -= 1
-                        else:
-                            del self.cart[p]
-                        refresh_cart()
-                    return dec
-
-                def make_inc(p=pid):
-                    def inc():
-                        # find current stock
-                        prods = get_products()
-                        for pp in prods:
-                            if pp[0] == p:
-                                if self.cart[p]["qty"] >= pp[4]:
-                                    messagebox.showwarning("Stock", "Not enough stock.")
-                                    return
-                                break
-                        self.cart[p]["qty"] += 1
-                        refresh_cart()
-                    return inc
-
-                tk.Button(qty_frame, text="−", font=("Arial", 10, "bold"),
-                          bg=BORDER, fg=TEXT_DARK, bd=0, relief="flat",
-                          width=2, cursor="hand2",
-                          command=make_dec(pid)).pack(side="left")
-                tk.Label(qty_frame, text=str(item["qty"]), font=("Arial", 10, "bold"),
-                         bg=CARD_BG, fg=TEXT_DARK, width=3).pack(side="left")
-                tk.Button(qty_frame, text="+", font=("Arial", 10, "bold"),
-                          bg=BORDER, fg=TEXT_DARK, bd=0, relief="flat",
-                          width=2, cursor="hand2",
-                          command=make_inc(pid)).pack(side="left")
-
-                tk.Label(cart_body, text=f"  {subtotal:.2f} ₺",
-                         font=("Arial", 9), bg=CARD_BG,
-                         fg=TEXT_MUTED).pack(anchor="e")
-
-            total_lbl.config(text=f"Total  {total:.2f} ₺")
-
-        def complete_sale():
-            if not self.cart:
-                messagebox.showwarning("Cart", "Cart is empty.")
-                return
-            errors = []
-            sold = []
-            for pid, item in list(self.cart.items()):
-                result = record_sale(pid, item["qty"], sold_by=self.current_user)
-                if result != "Sale recorded successfully":
-                    errors.append(f"{item['name']}: {result}")
-                else:
-                    sold.append(pid)
-            for pid in sold:
-                del self.cart[pid]
-            if errors:
-                messagebox.showerror("Errors", "\n".join(errors))
-            else:
-                messagebox.showinfo("Success", "Sale completed successfully!")
-            refresh_cart()
-            render_products(search_var.get())
-
-        self._btn(cart_card, "Complete Sale", complete_sale,
-                  color=PRIMARY).pack(fill="x", padx=14, pady=(0, 14), ipady=6)
-
-        def clear_cart():
-            self.cart = {}
-            refresh_cart()
-
-        self._btn(cart_card, "Clear Cart", clear_cart,
-                  color=DANGER).pack(fill="x", padx=14, pady=(0, 14), ipady=4)
-
-        refresh_cart()
-
-    # ── Admin Sales screen ────────────────────────────────────────────────────
-
-    def show_sales_screen(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Sales Management")
-
-        total_rev, total_cnt, top_name, _ = get_sales_summary()
-        strip = tk.Frame(c, bg=MAIN_BG)
-        strip.pack(fill="x", padx=30, pady=(0, 18))
-        self._stat_card(strip, "Total Revenue", f"{total_rev:.2f} ₺", color=SUCCESS)
-        self._stat_card(strip, "Total Sales",   str(total_cnt),        color="#3b82f6")
-        self._stat_card(strip, "Top Product",   top_name,              color=WARNING)
-
-        hist_card = self._card(c)
-        hist_card.pack(padx=30, fill="both", expand=True)
-
-        filter_row = tk.Frame(hist_card, bg=CARD_BG, padx=20, pady=12)
-        filter_row.pack(fill="x")
-        tk.Label(filter_row, text="Sales History", font=("Arial", 12, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).pack(side="left", padx=(0, 20))
-
-        for lbl in ("From:", "To:"):
-            tk.Label(filter_row, text=lbl, font=("Arial", 10),
-                     bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(0, 4))
-            e = tk.Entry(filter_row, font=("Arial", 10), width=12,
-                         bg="#faf8f4", fg=TEXT_DARK, relief="solid", bd=1,
-                         insertbackground=TEXT_DARK)
-            e.insert(0, "YYYY-MM-DD")
-            e.pack(side="left", ipady=3, padx=(0, 10))
-            if lbl == "From:":
-                start_e = e
-            else:
-                end_e = e
-
-        tf = tk.Frame(hist_card, bg=CARD_BG)
-        tf.pack(fill="both", expand=True, padx=20, pady=(0, 4))
-
-        cols = ("ID", "Product ID", "Qty", "Total", "Date", "Sold By")
-        hist_tree = ttk.Treeview(tf, columns=cols, show="headings", height=10)
-        for col, w in zip(cols, [60, 90, 60, 110, 180, 110]):
-            hist_tree.heading(col, text=col)
-            hist_tree.column(col, anchor="center", width=w)
-        sb2 = ttk.Scrollbar(tf, orient="vertical", command=hist_tree.yview)
-        hist_tree.configure(yscrollcommand=sb2.set)
-        hist_tree.pack(side="left", fill="both", expand=True)
-        sb2.pack(side="right", fill="y")
-
-        def load_sales(start=None, end=None):
-            hist_tree.delete(*hist_tree.get_children())
-            for s in get_sales(start, end):
-                hist_tree.insert("", tk.END, values=s)
-
-        load_sales()
-
-        def apply_filter():
-            s = start_e.get().strip()
-            e = end_e.get().strip()
-            s = None if s == "YYYY-MM-DD" else s
-            e = None if e == "YYYY-MM-DD" else e
-            if bool(s) != bool(e):
-                messagebox.showwarning("Filter", "Please enter both From and To dates.")
-                return
-            load_sales(s, e)
-
-        def clear_filter():
-            for entry, placeholder in [(start_e, "YYYY-MM-DD"), (end_e, "YYYY-MM-DD")]:
-                entry.delete(0, tk.END)
-                entry.insert(0, placeholder)
-            load_sales()
-
-        self._btn(filter_row, "Filter", apply_filter, color=PRIMARY).pack(side="left", padx=(0, 6))
-        self._btn(filter_row, "Clear",  clear_filter, color="#64748b").pack(side="left")
-
-        cancel_row = tk.Frame(hist_card, bg=CARD_BG, padx=20)
-        cancel_row.pack(fill="x")
-
-        def cancel_selected():
-            sel = hist_tree.focus()
-            if not sel:
-                messagebox.showwarning("Select", "Please select a sale to cancel.")
-                return
-            vals = hist_tree.item(sel, "values")
-            if messagebox.askyesno("Confirm", f"Cancel sale #{vals[0]}? Stock will be restored."):
-                result = cancel_sale(int(vals[0]))
-                if result == "Sale cancelled successfully":
-                    messagebox.showinfo("Cancelled", "Sale cancelled and stock restored.")
-                    self.show_sales_screen()
-                else:
-                    messagebox.showerror("Error", result)
-
-        self._btn(cancel_row, "Cancel Selected Sale", cancel_selected, color=DANGER).pack(side="left")
-
-    # ── Charts ────────────────────────────────────────────────────────────────
-
-    def show_reports_screen(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Charts")
-
-        card = self._card(c)
-        card.pack(padx=30, fill="both", expand=True)
-
+            messagebox.showerror("Error", "Invalid username or password.")
+
+    username_entry.bind("<Return>", lambda e: do_login())
+    password_entry.bind("<Return>", lambda e: do_login())
+
+    tk.Button(frame, text="Log in", command=do_login,
+              font=("Arial", 11, "bold"), bg=PRIMARY, fg="white",
+              width=20, pady=6).pack()
+
+def setup_main(role):
+    global content_frame
+    clear_all()
+
+    menu = tk.Frame(root, bg=PRIMARY)
+    menu.pack(fill="x")
+
+    tk.Label(menu, text=f"Welcome, {current_user}",
+             font=("Arial", 10, "bold"), bg=PRIMARY, fg="white"
+             ).pack(side="left", padx=10, pady=8)
+
+    if role == "admin":
+        pages = [
+            ("Dashboard", show_dashboard),
+            ("Products",  show_manage_products),
+            ("Sales",     show_sales),
+            ("Charts",    show_charts),
+            ("Export",    show_export),
+        ]
+    else:
+        pages = [
+            ("Dashboard",  show_dashboard),
+            ("Products",   show_products),
+            ("Make a Sale", show_cart),
+            ("My Sales",   show_my_sales),
+        ]
+
+    for text, cmd in pages:
+        tk.Button(menu, text=text, font=("Arial", 10, "bold"),
+                  bg=PRIMARY_DARK, fg="white", bd=0, padx=12, pady=8,
+                  command=cmd).pack(side="left", padx=1)
+
+    tk.Button(menu, text="Logout", font=("Arial", 10, "bold"),
+              bg="#e06464", fg="white", bd=0, padx=12, pady=8,
+              command=show_login).pack(side="right", padx=10)
+
+    content_frame = tk.Frame(root, bg=BG)
+    content_frame.pack(fill="both", expand=True)
+    show_dashboard()
+
+def show_dashboard():
+    clear_content()
+
+    tk.Label(content_frame, text=f"Welcome, {current_user.capitalize()}",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=(20, 10))
+
+    total_rev, total_cnt, top_name, _ = get_sales_summary()
+    products = get_products()
+
+    tk.Label(content_frame,
+             text=f"Total Products: {len(products)}   |   "
+                  f"Total Sales: {total_cnt}   |   "
+                  f"Revenue: {total_rev:.2f} TL   |   "
+                  f"Top Product: {top_name}",
+             font=("Arial", 11), bg=BG, fg=TEXT).pack(pady=10)
+
+    tk.Label(content_frame, text="Recent Sales",
+             font=("Arial", 12, "bold"), bg=BG, fg=TEXT
+             ).pack(pady=(15, 5), anchor="w", padx=20)
+
+    cols = ["ID", "Product ID", "Qty", "Total (TL)", "Date", "Sold By"]
+    widths = [60, 80, 60, 110, 180, 110]
+    tree = make_table(content_frame, cols, widths, height=12)
+    for s in get_sales()[-15:]:
+        tree.insert("", tk.END, values=s)
+
+def show_manage_products():
+    clear_content()
+    tk.Label(content_frame, text="Product Management",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=15)
+
+    form = tk.LabelFrame(content_frame, text="Add New Product",
+                         font=("Arial", 10, "bold"), bg=BG, padx=10, pady=8)
+    form.pack(padx=20, fill="x")
+
+    tk.Label(form, text="Name:", bg=BG).grid(row=0, column=0, sticky="w", pady=6)
+    name_e = tk.Entry(form, width=18)
+    name_e.grid(row=0, column=1, padx=5)
+
+    tk.Label(form, text="Category:", bg=BG).grid(row=0, column=2, sticky="w")
+    cat_e = tk.Entry(form, width=14)
+    cat_e.grid(row=0, column=3, padx=5)
+
+    tk.Label(form, text="Price:", bg=BG).grid(row=0, column=4, sticky="w")
+    price_e = tk.Entry(form, width=8)
+    price_e.grid(row=0, column=5, padx=5)
+
+    tk.Label(form, text="Stock:", bg=BG).grid(row=0, column=6, sticky="w")
+    stock_e = tk.Entry(form, width=8)
+    stock_e.grid(row=0, column=7, padx=5)
+
+    cols = ["ID", "Product Name", "Category", "Price (TL)", "Stock"]
+    widths = [50, 200, 150, 100, 80]
+    tree = make_table(content_frame, cols, widths, height=10)
+
+    def load():
+        tree.delete(*tree.get_children())
+        for p in get_products():
+            tree.insert("", tk.END,
+                        values=(p[0], p[1], p[2], f"{p[3]:.2f}", p[4]))
+
+    def add_action():
+        name = name_e.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Product name cannot be empty!")
+            return
         try:
-            import matplotlib
-            matplotlib.use("TkAgg")
-            import matplotlib.pyplot  # noqa
-            from matplotlib.figure import Figure
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-        except Exception as e:
-            tk.Label(card, text=f"matplotlib not available:\n{e}",
-                     bg=CARD_BG, fg="red", font=("Arial", 11)).pack(pady=40)
+            price = float(price_e.get().strip() or "0")
+            stock = int(stock_e.get().strip() or "0")
+        except ValueError:
+            messagebox.showerror("Error", "Price and stock must be numbers!")
             return
+        add_product(name, cat_e.get().strip(), price, stock)
+        messagebox.showinfo("Success", f'"{name}" added.')
+        for e in [name_e, cat_e, price_e, stock_e]:
+            e.delete(0, tk.END)
+        load()
 
-        products   = get_products()
-        sales_data = get_sales_by_product()
+    tk.Button(form, text="Add", command=add_action, bg="#6aaa64", fg="white",
+              font=("Arial", 10, "bold")).grid(row=0, column=8, padx=10)
 
-        if not products:
-            tk.Label(card, text="No products to display.",
-                     bg=CARD_BG, fg=TEXT_MUTED, font=("Arial", 12)).pack(pady=40)
+    load()
+
+    def edit_action():
+        sel = tree.focus()
+        if not sel:
+            messagebox.showwarning("Warning", "Select a product to edit.")
             return
+        vals = tree.item(sel, "values")
+        pid = int(vals[0])
 
-        names      = [p[1] for p in products]
-        stocks     = [p[4] for p in products]
-        sale_names = [r[0] for r in sales_data]
-        sale_qtys  = [r[1] for r in sales_data]
+        dlg = tk.Toplevel(root)
+        dlg.title("Edit Product")
+        dlg.geometry("300x250")
+        dlg.grab_set()
 
-        # Daily revenue for line chart
-        from collections import defaultdict
-        daily = defaultdict(float)
+        fields = [("Name", vals[1]), ("Category", vals[2]),
+                  ("Price", vals[3]), ("Stock", vals[4])]
+        entries = {}
+        for i, (label, value) in enumerate(fields):
+            tk.Label(dlg, text=label + ":").grid(
+                row=i, column=0, padx=15, pady=8, sticky="w")
+            e = tk.Entry(dlg, width=20)
+            e.insert(0, value)
+            e.grid(row=i, column=1, padx=10)
+            entries[label] = e
+
+        def save():
+            try:
+                update_product(pid, entries["Name"].get().strip(),
+                               entries["Category"].get().strip(),
+                               float(entries["Price"].get()),
+                               int(entries["Stock"].get()))
+                dlg.destroy()
+                load()
+            except ValueError:
+                messagebox.showerror("Error", "Price/stock must be numbers!")
+
+        tk.Button(dlg, text="Save", command=save, bg=PRIMARY, fg="white",
+                  font=("Arial", 10, "bold")).grid(
+            row=4, column=0, columnspan=2, pady=15)
+
+    def delete_action():
+        sel = tree.focus()
+        if not sel:
+            messagebox.showwarning("Warning", "Select a product to delete.")
+            return
+        vals = tree.item(sel, "values")
+        if messagebox.askyesno("Confirm", f'Delete "{vals[1]}"?'):
+            delete_product(int(vals[0]))
+            load()
+
+    btn_row = tk.Frame(content_frame, bg=BG)
+    btn_row.pack(fill="x", padx=20, pady=5)
+    tk.Button(btn_row, text="Edit", command=edit_action,
+              bg="#e8a838", fg="white", font=("Arial", 10, "bold")
+              ).pack(side="left", padx=5)
+    tk.Button(btn_row, text="Delete", command=delete_action,
+              bg="#e06464", fg="white", font=("Arial", 10, "bold")
+              ).pack(side="left")
+
+def show_sales():
+    clear_content()
+    tk.Label(content_frame, text="Sales",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=15)
+
+    total_rev, total_cnt, top_name, _ = get_sales_summary()
+    tk.Label(content_frame,
+             text=f"Revenue: {total_rev:.2f} TL   |   "
+                  f"Sales: {total_cnt}   |   Top: {top_name}",
+             font=("Arial", 11), bg=BG, fg=TEXT).pack(pady=5)
+
+    cols = ["ID", "Product ID", "Qty", "Total (TL)", "Date", "Sold By"]
+    widths = [60, 80, 60, 110, 180, 110]
+    tree = make_table(content_frame, cols, widths, height=14)
+
+    def load():
+        tree.delete(*tree.get_children())
         for s in get_sales():
-            daily[s[4][:10]] += s[3]
-        dates    = sorted(daily.keys())
-        revenues = [daily[d] for d in dates]
-
-        from matplotlib.gridspec import GridSpec
-        fig = Figure(figsize=(7, 5), facecolor=CARD_BG)
-        gs  = GridSpec(2, 2, figure=fig)
-
-        ax1 = fig.add_subplot(gs[0, 0])
-        ax1.set_facecolor("#faf8f4")
-        bars1 = ax1.bar(names, stocks, color=PRIMARY, width=0.5, zorder=3)
-        ax1.bar_label(bars1, padding=2, color=TEXT_DARK, fontsize=8, fontweight="bold")
-        ax1.set_title("Stock Levels", fontsize=11, fontweight="bold", color=TEXT_DARK, pad=8)
-        ax1.set_ylabel("Qty", color=TEXT_MUTED, fontsize=8)
-        ax1.tick_params(axis="x", rotation=25, colors=TEXT_DARK, labelsize=7)
-        ax1.tick_params(axis="y", colors=TEXT_MUTED, labelsize=7)
-        ax1.spines[["top", "right"]].set_visible(False)
-        ax1.yaxis.grid(True, color=BORDER, zorder=0, linewidth=0.5)
-
-        ax2 = fig.add_subplot(gs[0, 1])
-        ax2.set_facecolor("#faf8f4")
-        bars2 = ax2.bar(sale_names, sale_qtys, color=SUCCESS, width=0.5, zorder=3)
-        ax2.bar_label(bars2, padding=2, color=TEXT_DARK, fontsize=8, fontweight="bold")
-        ax2.set_title("Units Sold per Product", fontsize=11, fontweight="bold",
-                      color=TEXT_DARK, pad=8)
-        ax2.set_ylabel("Qty Sold", color=TEXT_MUTED, fontsize=8)
-        ax2.tick_params(axis="x", rotation=25, colors=TEXT_DARK, labelsize=7)
-        ax2.tick_params(axis="y", colors=TEXT_MUTED, labelsize=7)
-        ax2.spines[["top", "right"]].set_visible(False)
-        ax2.yaxis.grid(True, color=BORDER, zorder=0, linewidth=0.5)
-
-        ax3 = fig.add_subplot(gs[1, :])
-        ax3.set_facecolor("#faf8f4")
-        if dates:
-            ax3.plot(dates, revenues, color=PRIMARY, linewidth=2, marker="o",
-                     markersize=5, markerfacecolor=PRIMARY_DARK, zorder=3)
-            ax3.fill_between(dates, revenues, alpha=0.12, color=PRIMARY)
-        else:
-            ax3.text(0.5, 0.5, "No sales data yet", transform=ax3.transAxes,
-                     ha="center", va="center", color=TEXT_MUTED, fontsize=10)
-        ax3.set_title("Daily Revenue (₺)", fontsize=11, fontweight="bold",
-                      color=TEXT_DARK, pad=8)
-        ax3.set_ylabel("₺", color=TEXT_MUTED, fontsize=8)
-        ax3.tick_params(axis="x", rotation=30, colors=TEXT_DARK, labelsize=7)
-        ax3.tick_params(axis="y", colors=TEXT_MUTED, labelsize=7)
-        ax3.spines[["top", "right"]].set_visible(False)
-        ax3.yaxis.grid(True, color=BORDER, zorder=0, linewidth=0.5)
-
-        fig.tight_layout(pad=1.8)
-        canvas = FigureCanvasTkAgg(fig, master=card)
-        canvas.draw()
-        canvas.get_tk_widget().pack(padx=20, pady=20)
-
-    # ── Reports list ──────────────────────────────────────────────────────────
-
-    def show_reports_list(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Reports")
-
-        card = self._card(c)
-        card.pack(padx=30, fill="both", expand=True)
-
-        sales = get_sales()
-        if not sales:
-            tk.Label(card, text="No sales recorded yet.",
-                     bg=CARD_BG, fg=TEXT_MUTED, font=("Arial", 12)).pack(pady=40)
-            return
-
-        tf = tk.Frame(card, bg=CARD_BG)
-        tf.pack(fill="both", expand=True, padx=20, pady=16)
-
-        cols = ("Sale ID", "Product ID", "Qty", "Total Price", "Date", "Sold By")
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
-        for col, w in zip(cols, [70, 90, 60, 110, 180, 110]):
-            tree.heading(col, text=col)
-            tree.column(col, anchor="center", width=w)
-        sb = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        for s in sales:
             tree.insert("", tk.END, values=s)
 
-    # ── Export ────────────────────────────────────────────────────────────────
+    load()
 
-    def show_export_screen(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "Export Data")
-
-        card = self._card(c)
-        card.pack(padx=30)
-
-        inner = tk.Frame(card, bg=CARD_BG, padx=40, pady=34)
-        inner.pack()
-
-        tk.Label(inner, text="Data", font=("Arial", 10, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).grid(row=0, column=0, sticky="w", pady=(0, 4))
-        data_var = tk.StringVar(value="Products")
-        ttk.Combobox(inner, textvariable=data_var,
-                     values=["Products", "Sales"],
-                     state="readonly", width=24).grid(row=1, column=0, padx=(0, 30), ipady=5)
-
-        tk.Label(inner, text="Format", font=("Arial", 10, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).grid(row=0, column=1, sticky="w", pady=(0, 4))
-        fmt_var = tk.StringVar(value="CSV")
-        ttk.Combobox(inner, textvariable=fmt_var,
-                     values=["CSV", "Excel (.xlsx)"],
-                     state="readonly", width=24).grid(row=1, column=1, ipady=5)
-
-        def do_export():
-            choice = data_var.get()
-            fmt    = fmt_var.get()
-            rows   = get_products() if choice == "Products" else get_sales()
-            hdrs   = (["ID", "Name", "Category", "Price", "Stock"]
-                      if choice == "Products"
-                      else ["Sale ID", "Product ID", "Qty", "Total Price", "Date", "Sold By"])
-            if not rows:
-                messagebox.showwarning("No Data", f"No {choice.lower()} to export.")
-                return
-            if fmt == "CSV":
-                fp = filedialog.asksaveasfilename(
-                    defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-                    initialfile=f"{choice.lower()}_export.csv")
-                if not fp:
-                    return
-                with open(fp, "w", newline="", encoding="utf-8") as f:
-                    csv.writer(f).writerows([hdrs] + [list(r) for r in rows])
-                messagebox.showinfo("Exported", f"Saved to:\n{fp}")
-            else:
-                try:
-                    import openpyxl
-                except ImportError:
-                    messagebox.showerror("Missing library", "Run: pip install openpyxl")
-                    return
-                fp = filedialog.asksaveasfilename(
-                    defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
-                    initialfile=f"{choice.lower()}_export.xlsx")
-                if not fp:
-                    return
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = choice
-                ws.append(hdrs)
-                for r in rows:
-                    ws.append(list(r))
-                wb.save(fp)
-                messagebox.showinfo("Exported", f"Saved to:\n{fp}")
-
-        self._btn(inner, "Export", do_export, color=PRIMARY).grid(
-            row=2, column=0, columnspan=2, sticky="ew", pady=(24, 0), ipady=5)
-
-    # ── User Management ───────────────────────────────────────────────────────
-
-    def show_user_management(self):
-        self._clear_content()
-        c = self.content_area
-        self._page_title(c, "User Management")
-
-        form_card = self._card(c)
-        form_card.pack(padx=30, pady=(0, 20), fill="x")
-
-        fi = tk.Frame(form_card, bg=CARD_BG, padx=26, pady=20)
-        fi.pack(fill="x")
-
-        tk.Label(fi, text="Add New User", font=("Arial", 12, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).grid(
-                     row=0, column=0, columnspan=6, sticky="w", pady=(0, 14))
-
-        fields_info = [("Username", "uname"), ("Password", "pwd")]
-        u_entries = {}
-        for i, (lbl, key) in enumerate(fields_info):
-            tk.Label(fi, text=lbl, font=("Arial", 10, "bold"),
-                     bg=CARD_BG, fg=TEXT_DARK).grid(
-                         row=1, column=i*2, sticky="w", padx=(0, 8))
-            e = tk.Entry(fi, font=("Arial", 10), width=18,
-                         bg="#faf8f4", fg=TEXT_DARK, relief="solid", bd=1,
-                         insertbackground=TEXT_DARK,
-                         show=("*" if key == "pwd" else ""))
-            e.grid(row=1, column=i*2+1, padx=(0, 20), ipady=5)
-            u_entries[key] = e
-
-        tk.Label(fi, text="Role", font=("Arial", 10, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).grid(row=1, column=4, sticky="w", padx=(0, 8))
-        role_var = tk.StringVar(value="cashier")
-        ttk.Combobox(fi, textvariable=role_var, values=["cashier", "admin"],
-                     state="readonly", width=12).grid(row=1, column=5, ipady=4, padx=(0, 20))
-
-        def add_action():
-            uname = u_entries["uname"].get().strip()
-            pwd   = u_entries["pwd"].get().strip()
-            if not uname or not pwd:
-                messagebox.showerror("Validation", "Username and password required.")
-                return
-            result = add_user(uname, pwd, role_var.get())
-            if result == "User added successfully":
-                messagebox.showinfo("Success", f'User "{uname}" added.')
-                for e in u_entries.values():
-                    e.delete(0, tk.END)
-                self.show_user_management()
+    def cancel_action():
+        sel = tree.focus()
+        if not sel:
+            messagebox.showwarning("Warning", "Select a sale to cancel.")
+            return
+        vals = tree.item(sel, "values")
+        if messagebox.askyesno("Confirm", f"Cancel sale #{vals[0]}?"):
+            result = cancel_sale(int(vals[0]))
+            if result == "Sale cancelled successfully":
+                messagebox.showinfo("Done", "Sale cancelled.")
+                load()
             else:
                 messagebox.showerror("Error", result)
 
-        self._btn(fi, "Add User", add_action, color=PRIMARY).grid(
-            row=2, column=0, columnspan=6, sticky="w", pady=(14, 0))
+    tk.Button(content_frame, text="Cancel Selected Sale", command=cancel_action,
+              bg="#e06464", fg="white", font=("Arial", 10, "bold")
+              ).pack(padx=20, pady=5, anchor="w")
 
-        list_card = self._card(c)
-        list_card.pack(padx=30, fill="both", expand=True)
+def show_charts():
+    clear_content()
+    tk.Label(content_frame, text="Charts",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=15)
 
-        tk.Label(list_card, text="All Users", font=("Arial", 12, "bold"),
-                 bg=CARD_BG, fg=TEXT_DARK).pack(anchor="w", padx=20, pady=(14, 0))
+    try:
+        import matplotlib
+        matplotlib.use("TkAgg")
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    except ImportError:
+        tk.Label(content_frame,
+                 text="matplotlib is not installed.\nRun: pip install matplotlib",
+                 font=("Arial", 12), bg=BG, fg="red").pack(pady=40)
+        return
 
-        tf = tk.Frame(list_card, bg=CARD_BG)
-        tf.pack(fill="both", expand=True, padx=20, pady=10)
+    products = get_products()
+    all_sales = get_sales()
+    if not products:
+        tk.Label(content_frame, text="No products yet.",
+                 bg=BG, font=("Arial", 11)).pack(pady=30)
+        return
 
-        cols = ("ID", "Username", "Role")
-        user_tree = ttk.Treeview(tf, columns=cols, show="headings", height=8)
-        for col, w in zip(cols, [60, 200, 120]):
-            user_tree.heading(col, text=col)
-            user_tree.column(col, anchor="center", width=w)
-        sb3 = ttk.Scrollbar(tf, orient="vertical", command=user_tree.yview)
-        user_tree.configure(yscrollcommand=sb3.set)
-        user_tree.pack(side="left", fill="both", expand=True)
-        sb3.pack(side="right", fill="y")
+    prod_names = [p[1] for p in products]
+    prod_stocks = [p[4] for p in products]
 
-        for u in get_users():
-            user_tree.insert("", tk.END, values=u)
+    from collections import defaultdict
+    cat_rev = defaultdict(float)
+    cat_map = {p[0]: (p[2] or "Other") for p in products}
+    for s in all_sales:
+        cat_rev[cat_map.get(s[1], "Other")] += s[3]
 
-        def del_user():
-            sel = user_tree.focus()
-            if not sel:
-                messagebox.showwarning("Select", "Please select a user.")
+    fig = Figure(figsize=(10, 4), facecolor=CARD)
+
+    ax1 = fig.add_subplot(1, 2, 1)
+    short_names = [n[:12] for n in prod_names]
+    ax1.bar(short_names, prod_stocks, color=PRIMARY)
+    ax1.set_title("Stock Levels")
+    ax1.set_ylabel("Units")
+    ax1.tick_params(axis="x", rotation=30, labelsize=8)
+
+    ax2 = fig.add_subplot(1, 2, 2)
+    if cat_rev:
+        ax2.pie(list(cat_rev.values()), labels=list(cat_rev.keys()),
+                autopct="%1.0f%%",
+                colors=["#c9a96e", "#6aaa64", "#3b82f6", "#e8a838"])
+    else:
+        ax2.text(0.5, 0.5, "No sales yet", ha="center", va="center")
+    ax2.set_title("Revenue by Category")
+
+    fig.tight_layout()
+    canvas = FigureCanvasTkAgg(fig, master=content_frame)
+    canvas.draw()
+    canvas.get_tk_widget().pack(fill="both", expand=True, padx=20, pady=10)
+
+def show_export():
+    clear_content()
+    tk.Label(content_frame, text="Export Data",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=15)
+
+    frame = tk.Frame(content_frame, bg=BG)
+    frame.pack(pady=20)
+
+    def export_csv():
+        folder = filedialog.askdirectory(title="Select folder")
+        if not folder:
+            return
+        with open(os.path.join(folder, "products.csv"),
+                  "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["ID", "Name", "Category", "Price", "Stock"])
+            w.writerows(get_products())
+        with open(os.path.join(folder, "sales.csv"),
+                  "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["Sale ID", "Product ID", "Qty", "Total", "Date", "Sold By"])
+            w.writerows(get_sales())
+        messagebox.showinfo("Done", f"Files saved to:\n{folder}")
+
+    def export_excel():
+        try:
+            import openpyxl
+        except ImportError:
+            messagebox.showerror("Error",
+                                 "openpyxl not installed.\nRun: pip install openpyxl")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")])
+        if not path:
+            return
+        wb = openpyxl.Workbook()
+        ws1 = wb.active
+        ws1.title = "Products"
+        ws1.append(["ID", "Name", "Category", "Price", "Stock"])
+        for p in get_products():
+            ws1.append(list(p))
+        ws2 = wb.create_sheet("Sales")
+        ws2.append(["Sale ID", "Product ID", "Qty", "Total", "Date", "Sold By"])
+        for s in get_sales():
+            ws2.append(list(s))
+        wb.save(path)
+        messagebox.showinfo("Done", f"Saved to:\n{path}")
+
+    tk.Button(frame, text="Export as CSV", command=export_csv,
+              font=("Arial", 12, "bold"), bg=PRIMARY, fg="white",
+              width=20, pady=8).pack(pady=10)
+    tk.Button(frame, text="Export as Excel", command=export_excel,
+              font=("Arial", 12, "bold"), bg="#6aaa64", fg="white",
+              width=20, pady=8).pack(pady=10)
+
+def show_products():
+    clear_content()
+    tk.Label(content_frame, text="Products",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=15)
+
+    cols = ["ID", "Product Name", "Category", "Price (TL)", "Stock"]
+    widths = [60, 220, 150, 110, 80]
+    tree = make_table(content_frame, cols, widths)
+    for p in get_products():
+        tree.insert("", tk.END,
+                    values=(p[0], p[1], p[2], f"{p[3]:.2f}", p[4]))
+
+def show_cart():
+    global cart
+    clear_content()
+    tk.Label(content_frame, text="Make a Sale",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=10)
+
+    outer = tk.Frame(content_frame, bg=BG)
+    outer.pack(fill="both", expand=True, padx=20)
+
+    left = tk.Frame(outer, bg=BG)
+    left.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+    tk.Label(left, text="Products", font=("Arial", 11, "bold"), bg=BG
+             ).pack(anchor="w")
+
+    prod_cols = ["ID", "Name", "Price (TL)", "Stock"]
+    prod_widths = [50, 200, 100, 70]
+    pf = tk.Frame(left)
+    pf.pack(fill="both", expand=True)
+    prod_tree = ttk.Treeview(pf, columns=prod_cols,
+                             show="headings", height=14)
+    for c, w in zip(prod_cols, prod_widths):
+        prod_tree.heading(c, text=c)
+        prod_tree.column(c, anchor="center", width=w)
+    sb = ttk.Scrollbar(pf, orient="vertical", command=prod_tree.yview)
+    prod_tree.configure(yscrollcommand=sb.set)
+    prod_tree.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
+
+    def load_products():
+        prod_tree.delete(*prod_tree.get_children())
+        for p in get_products():
+            prod_tree.insert("", tk.END,
+                             values=(p[0], p[1], f"{p[3]:.2f}", p[4]))
+
+    load_products()
+
+    right = tk.Frame(outer, bg=BG, width=280)
+    right.pack(side="right", fill="y")
+    right.pack_propagate(False)
+
+    tk.Label(right, text="Cart", font=("Arial", 11, "bold"), bg=BG
+             ).pack(anchor="w")
+
+    cart_list = tk.Listbox(right, font=("Arial", 10), height=14)
+    cart_list.pack(fill="both", expand=True, pady=5)
+
+    total_label = tk.Label(right, text="Total: 0.00 TL",
+                           font=("Arial", 12, "bold"), bg=BG)
+    total_label.pack(pady=5)
+
+    def refresh_cart():
+        cart_list.delete(0, tk.END)
+        total = 0.0
+        for pid, item in cart.items():
+            subtotal = item["price"] * item["qty"]
+            total += subtotal
+            cart_list.insert(
+                tk.END,
+                f'{item["name"]} x{item["qty"]} = {subtotal:.2f} TL')
+        total_label.config(text=f"Total: {total:.2f} TL")
+
+    def add_to_cart():
+        sel = prod_tree.focus()
+        if not sel:
+            messagebox.showwarning("Warning", "Select a product.")
+            return
+        vals = prod_tree.item(sel, "values")
+        pid = int(vals[0])
+        current = next((p for p in get_products() if p[0] == pid), None)
+        if not current:
+            return
+        if pid in cart:
+            if cart[pid]["qty"] >= current[4]:
+                messagebox.showwarning("Stock", "Not enough stock!")
                 return
-            vals = user_tree.item(sel, "values")
-            if vals[1] == self.current_user:
-                messagebox.showerror("Error", "You cannot delete your own account.")
+            cart[pid]["qty"] += 1
+        else:
+            if current[4] < 1:
+                messagebox.showwarning("Stock", "Out of stock!")
                 return
-            if messagebox.askyesno("Confirm", f'Delete user "{vals[1]}"?'):
-                delete_user(int(vals[0]))
-                self.show_user_management()
+            cart[pid] = {"name": current[1], "price": current[3], "qty": 1}
+        refresh_cart()
 
-        btn_row = tk.Frame(list_card, bg=CARD_BG, padx=20)
-        btn_row.pack(fill="x")
-        self._btn(btn_row, "Delete User", del_user, color=DANGER).pack(side="left")
+    def remove_from_cart():
+        sel = cart_list.curselection()
+        if not sel:
+            return
+        pid = list(cart.keys())[sel[0]]
+        del cart[pid]
+        refresh_cart()
 
+    def complete_sale():
+        global cart
+        if not cart:
+            messagebox.showwarning("Warning", "Cart is empty!")
+            return
+        errors = []
+        done = []
+        for pid, item in list(cart.items()):
+            result = record_sale(pid, item["qty"], sold_by=current_user)
+            if result == "Sale recorded successfully":
+                done.append(pid)
+            else:
+                errors.append(f'{item["name"]}: {result}')
+        for pid in done:
+            del cart[pid]
+        if errors:
+            messagebox.showerror("Error", "\n".join(errors))
+        else:
+            messagebox.showinfo("Success", "Sale completed!")
+        refresh_cart()
+        load_products()
+
+    def clear_cart_action():
+        global cart
+        cart = {}
+        refresh_cart()
+
+    tk.Button(left, text="Add to Cart", command=add_to_cart,
+              bg="#6aaa64", fg="white", font=("Arial", 10, "bold")
+              ).pack(pady=5)
+
+    btn_frame = tk.Frame(right, bg=BG)
+    btn_frame.pack(fill="x")
+    tk.Button(btn_frame, text="Remove", command=remove_from_cart,
+              bg="#e8a838", fg="white", font=("Arial", 10, "bold")
+              ).pack(fill="x", pady=2)
+    tk.Button(btn_frame, text="Complete Sale", command=complete_sale,
+              bg="#6aaa64", fg="white", font=("Arial", 10, "bold")
+              ).pack(fill="x", pady=2)
+    tk.Button(btn_frame, text="Clear Cart", command=clear_cart_action,
+              bg="#e06464", fg="white", font=("Arial", 10, "bold")
+              ).pack(fill="x", pady=2)
+
+    refresh_cart()
+
+def show_my_sales():
+    clear_content()
+    tk.Label(content_frame, text="My Sales",
+             font=("Arial", 16, "bold"), bg=BG, fg=TEXT).pack(pady=15)
+
+    my_sales = [s for s in get_sales() if s[5] == current_user]
+    total_rev = sum(s[3] for s in my_sales)
+    tk.Label(content_frame,
+             text=f"Total: {len(my_sales)} sales   |   "
+                  f"Revenue: {total_rev:.2f} TL",
+             font=("Arial", 11), bg=BG, fg=TEXT).pack(pady=5)
+
+    cols = ["ID", "Product ID", "Qty", "Total (TL)", "Date"]
+    widths = [60, 80, 70, 120, 200]
+    tree = make_table(content_frame, cols, widths, height=14)
+    for s in my_sales:
+        tree.insert("", tk.END,
+                    values=(s[0], s[1], s[2], f"{s[3]:.2f}", s[4]))
 
 if __name__ == "__main__":
     create_database()
     insert_default_users()
+
     root = tk.Tk()
-    app = StoreApp(root)
+    root.title("StockStyle")
+    root.geometry("1000x650")
+    root.minsize(800, 500)
+    root.configure(bg=BG)
+
+    style = ttk.Style()
+    style.theme_use("clam")
+    style.configure("Treeview", background=CARD, foreground=TEXT,
+                    rowheight=26, fieldbackground=CARD)
+    style.configure("Treeview.Heading", background=PRIMARY,
+                    foreground="white", font=("Arial", 10, "bold"))
+
+    show_login()
     root.mainloop()
